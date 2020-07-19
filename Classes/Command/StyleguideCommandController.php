@@ -13,10 +13,13 @@ namespace Sitegeist\Monocle\Command;
  * source code.
  */
 
+use Neos\Eel\Exception;
+use Neos\Flow\Package\PackageInterface;
 use Sitegeist\Monocle\Fusion\FusionService;
 use Sitegeist\Monocle\Fusion\FusionView;
 use Neos\Flow\Annotations as Flow;
 use Neos\Flow\Cli\CommandController;
+use Sitegeist\Monocle\Service\RenderService;
 use Symfony\Component\Yaml\Yaml;
 use Sitegeist\Monocle\Service\DummyControllerContextTrait;
 use Sitegeist\Monocle\Service\PackageKeyTrait;
@@ -41,6 +44,12 @@ class StyleguideCommandController extends CommandController
      * @var ConfigurationService
      */
     protected $configurationService;
+
+    /**
+     * @Flow\Inject
+     * @var RenderService
+     */
+    protected $renderService;
 
     /**
      * Get a list of all configured default styleguide viewports
@@ -124,5 +133,53 @@ class StyleguideCommandController extends CommandController
                 throw new \Exception(sprintf('Unsupported format %s', $format));
                 break;
         }
+    }
+
+    /**
+     * export all rendered prototypes into a directory
+     *
+     * @param string $packageKey
+     * @param string $locales
+     * @throws \Neos\Flow\Mvc\Exception
+     * @throws \Neos\Neos\Domain\Exception
+     */
+    public function exportCommand(string $packageKey, $locales = '') {
+
+        /** @var PackageInterface $package */
+        $package = $this->packageManager->getPackage($packageKey);
+        $exportPath = $package->getPackagePath() . 'export/';
+
+        $fusionObjectTree = $this->fusionService->getMergedFusionObjectTreeForSitePackage($packageKey);
+        $styleguideObjects = $this->fusionService->getStyleguideObjectsFromFusionAst($fusionObjectTree);
+        $convertedLocales = json_decode($locales, true) ?? [];
+
+        foreach ($styleguideObjects as $prototypeName => $styleguideObject) {
+                $fusionAst =  $fusionObjectTree['__prototypes'][$prototypeName];
+                $controllerContext = $this->createDummyControllerContext();
+                $props = $fusionAst['__meta']['styleguide']['props'] ?? [];
+
+                try {
+                    $renderDefault = $this->renderService->renderPrototype($controllerContext, $prototypeName, $packageKey, [], null, $convertedLocales );
+                    $this->renderService->exportRendering($renderDefault, $exportPath, $styleguideObject['path'] . '_default');
+                } catch (Exception $e) {
+                    \Neos\Flow\var_dump($props);
+                    \Neos\Flow\var_dump($prototypeName);
+                    \Neos\Flow\var_dump($e->getMessage());
+                }
+
+
+                if (isset($fusionAst['__meta']['styleguide']['propSets'])) {
+                    foreach ($fusionAst['__meta']['styleguide']['propSets'] as $propSetName => $propSetValues) {
+                        try {
+                            $renderPropSet = $this->renderService->renderPrototype($controllerContext, $prototypeName, $packageKey, [], $propSetName, $convertedLocales );
+                            $this->renderService->exportRendering($renderPropSet, $exportPath, $styleguideObject['path'] . '_' . $propSetName);
+                        } catch (Exception $e) {
+                            \Neos\Flow\var_dump($props);
+                            \Neos\Flow\var_dump($prototypeName);
+                            \Neos\Flow\var_dump($e->getMessage());
+                        }
+                    }
+                }
+            }
     }
 }
